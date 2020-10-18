@@ -2,7 +2,8 @@
 /* includes */
 /*===================================================================================================================*/
 #include <ArduinoOTA.h>
-
+#include "main.h"
+#ifndef CFG_OTA_ONLY
 #include <DHTesp.h>
 #include <Wire.h> /* for BME280 */
 #include <SPI.h>  /* for BME280 */
@@ -10,7 +11,6 @@
 #include "MQTTClient.h"
 #include "user_fonts.h"
 #include <SSD1306.h>
-#include "main.h"
 #include "c_mqtt.h"
 #include "c_thermostat.h"
 #include <Bounce2.h>
@@ -294,12 +294,12 @@ void WIFI_CONNECT(void) {
     #endif
 
     WiFi.mode(WIFI_STA);
+    WiFi.encryptionType(AUTH_WPA2_PSK);
+    WiFi.setAutoReconnect(true);
     #if CFG_BOARD_ESP8266
-    WiFi.setSleepMode(WIFI_NONE_SLEEP);
     WiFi.hostname(myConfig.name);
     #elif CFG_BOARD_ESP32
     WiFi.setHostname(myConfig.name);
-    WiFi.setSleep(false);
     #endif
     WiFi.begin(myConfig.ssid, myConfig.wifi_password);
 
@@ -477,8 +477,6 @@ void HANDLE_SYSTEM_STATE(void) {
       #ifdef CFG_DEBUG
       Serial.println("Lost WiFi; Status: "+ String(WiFi.status()));
       #endif
-      /* try to come online, debounced to avoid reconnect each loop*/
-      WIFI_CONNECT();
     }
   }
   /* check if button is pushed for 10 seconds to request a reset */
@@ -1506,3 +1504,70 @@ void messageReceived(String &topic, String &payload) {  // NOLINT
     myThermostat.setOutsideTemperature(floatToInt(payload.toFloat()));
   }
 }
+#else
+void setup() {
+  Serial.begin(115200);
+  if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("Initialize WiFi ");
+
+      WiFi.mode(WIFI_STA);
+      #if CFG_BOARD_ESP8266
+      WiFi.setSleepMode(WIFI_NONE_SLEEP);
+      WiFi.hostname(getEspChipId().c_str());
+      #elif CFG_BOARD_ESP32
+      WiFi.setHostname(getEspChipId().c_str());
+      WiFi.setSleep(false);
+      #endif
+      WiFi.begin(WIFI_SSID, WIFI_PWD);
+
+      /* try to connect to WiFi, proceed offline if not connecting here*/
+      while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+        Serial.println("Failed to connect to WiFi, retry in 5s.");
+        delay(secondsToMilliseconds(5));
+      }
+    }
+
+  Serial.println("WiFi Status: "+ wifiStatusToString(WiFi.status()));
+  WiFi.printDiag(Serial);
+  Serial.println("Local IP: "+ WiFi.localIP().toString());
+  Serial.println("Gateway IP: " + WiFi.gatewayIP().toString());
+  Serial.println("DNS IP: " + WiFi.dnsIP().toString());
+
+  ArduinoOTA.setHostname(getEspChipId().c_str());
+  ArduinoOTA.setPort(8266);
+  ArduinoOTA.onStart([]() {
+    Serial.println("Start OTA");
+  });
+
+  ArduinoOTA.onEnd([]() {
+    #ifdef CFG_DEBUG
+    Serial.println("\nEnd OTA");
+    #endif
+  });
+
+  ArduinoOTA.onProgress([](uint16_t progress, uint16_t total) {
+    #ifdef CFG_DEBUG
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    #endif
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+  });
+
+  ArduinoOTA.begin();
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.begin(WIFI_SSID, WIFI_PWD);
+
+    /* try to connect to WiFi, proceed offline if not connecting here*/
+    while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+      Serial.println("Failed to connect to WiFi, retry in 5s.");
+      delay(secondsToMilliseconds(5));
+    }
+  }
+  ArduinoOTA.handle();
+}
+#endif
